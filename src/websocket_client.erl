@@ -9,19 +9,18 @@
         ]).
 
 -export([ws_client_init/7]).
--export([start_link_with_socket/5]).
+-export([start_link_with_socket/6]).
 -export([ws_client_init_with_socket/8]).
 
 %% @doc Start the websocket client with a custom socket
 -spec start_link_with_socket(Socket :: term(), Transport :: ssl | gen_tcp,
-                             Host :: string(), Path :: string(), Handler :: module()) ->
+                             Host :: string(), Path :: string(), Opts :: list(), Handler :: module()) ->
                                   {ok, pid()} | {error, term()}.
-start_link_with_socket(Socket, Transport, Host, Path, Handler) ->
+start_link_with_socket(Socket, Transport, Host, Path, Opts, Handler) ->
     Port = case Transport of
         ssl -> 443;
         gen_tcp -> 80
     end,
-    Opts = [],
     proc_lib:start_link(?MODULE, ws_client_init_with_socket,
                         [Handler, Transport, Host, Port, Path, [], Socket, Opts]).
 
