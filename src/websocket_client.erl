@@ -82,15 +82,15 @@ start_link(URL, Handler, HandlerArgs, Opts) when is_list(Opts) ->
     Parsed = uri_string:parse(URL),
     case Parsed of
         #{scheme := SchemeStr, host := HostStr} ->
-            Scheme = to_atom(SchemeStr),
-            Host = to_list(HostStr),
+            Scheme = list_to_atom(unicode:characters_to_list(SchemeStr)),
+            Host = unicode:characters_to_list(HostStr),
             Port = maps:get(port, Parsed, default_port(Scheme)),
             Path = maps:get(path, Parsed, "/"),
             Query = case maps:get(query, Parsed, undefined) of
                         undefined -> "";
-                        Q -> "?" ++ to_list(Q)
+                        Q -> "?" ++ unicode:characters_to_list(Q)
                     end,
-            FullPath = to_list(Path) ++ Query,
+            FullPath = unicode:characters_to_list(Path) ++ Query,
             proc_lib:start_link(?MODULE, ws_client_init,
                                 [Handler, Scheme, Host, Port, FullPath, HandlerArgs, Opts]);
         _ ->
