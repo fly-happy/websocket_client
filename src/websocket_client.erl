@@ -79,19 +79,27 @@ start_link(URL, Handler, HandlerArgs, AsyncStart) when is_boolean(AsyncStart) ->
 start_link(URL, Handler, HandlerArgs, Opts) when is_binary(URL) ->
 	start_link(erlang:binary_to_list(URL), Handler, HandlerArgs, Opts);
 start_link(URL, Handler, HandlerArgs, Opts) when is_list(Opts) ->
-    case uri_string:parse(URL) of
-        #{scheme := Protocol, host := Host, port := _, path := Path, query := Query} ->
-            % 如果端口是 undefined，手动根据协议补默认端口
-            Port = case Protocol of
-                ws -> 80;
-                wss -> 443;
-                _ -> undefined
-            end,
+    Parsed = uri_string:parse(URL),
+    case Parsed of
+        #{scheme := SchemeStr, host := HostStr} ->
+            Scheme = to_atom(SchemeStr),
+            Host = to_list(HostStr),
+            Port = maps:get(port, Parsed, default_port(Scheme)),
+            Path = maps:get(path, Parsed, "/"),
+            Query = case maps:get(query, Parsed, undefined) of
+                        undefined -> "";
+                        Q -> "?" ++ to_list(Q)
+                    end,
+            FullPath = to_list(Path) ++ Query,
             proc_lib:start_link(?MODULE, ws_client_init,
-                                [Handler, Protocol, Host, Port, Path ++ Query, HandlerArgs, Opts]);
-        {error, _} = Error ->
-            Error
+                                [Handler, Scheme, Host, Port, FullPath, HandlerArgs, Opts]);
+        _ ->
+            {error, invalid_uri}
     end.
+
+default_port(ws)  -> 80;
+default_port(wss) -> 443.
+
 
 %% Send a frame asynchronously
 -spec cast(Client :: pid(), Frame :: websocket_req:frame()) ->
