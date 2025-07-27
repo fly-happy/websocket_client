@@ -79,8 +79,14 @@ start_link(URL, Handler, HandlerArgs, AsyncStart) when is_boolean(AsyncStart) ->
 start_link(URL, Handler, HandlerArgs, Opts) when is_binary(URL) ->
 	start_link(erlang:binary_to_list(URL), Handler, HandlerArgs, Opts);
 start_link(URL, Handler, HandlerArgs, Opts) when is_list(Opts) ->
-    case uri_string:parse(URL, [{scheme_defaults, [{ws,80},{wss,443}]}]) of
-        {ok, {Protocol, _, Host, Port, Path, Query}} ->
+    case uri_string:parse(URL) of
+        {ok, {Protocol, _, Host, _, Path, Query}} ->
+            % 如果端口是 undefined，手动根据协议补默认端口
+            Port = case Protocol of
+                ws -> 80;
+                wss -> 443;
+                _ -> undefined
+            end,
             proc_lib:start_link(?MODULE, ws_client_init,
                                 [Handler, Protocol, Host, Port, Path ++ Query, HandlerArgs, Opts]);
         {error, _} = Error ->
