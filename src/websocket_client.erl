@@ -7,66 +7,11 @@
          cast/2,
          send/2
         ]).
-
+-export([start_link_with_socket/4,
+         start_link_with_socket/5
+        ]).
 -export([ws_client_init/7]).
--export([start_link_with_socket/6]).
 -export([ws_client_init_with_socket/8]).
-
-%% @doc Start the websocket client with a custom socket
--spec start_link_with_socket(Socket :: term(), Transport :: ssl | gen_tcp,
-                             Host :: string(), Path :: string(), Opts :: list(), Handler :: module()) ->
-                                  {ok, pid()} | {error, term()}.
-start_link_with_socket(Socket, Transport, Host, Path, Opts, Handler) ->
-    Port = case Transport of
-        ssl -> 443;
-        gen_tcp -> 80
-    end,
-    proc_lib:start_link(?MODULE, ws_client_init_with_socket,
-                        [Handler, Transport, Host, Port, Path, [], Socket, Opts]).
-
-
--spec ws_client_init_with_socket(Handler :: module(), Transport :: ssl | gen_tcp,
-                                 Host :: string(), Port :: inet:port_number(), Path :: string(),
-                                 Args :: list(), Socket :: term(), Opts :: list()) ->
-                                      no_return().
-ws_client_init_with_socket(Handler, Transport, Host, Port, Path, Args, Socket, Opts) ->
-    Protocol = case Transport of
-                    ssl ->
-                        wss;
-                    gen_tcp ->
-                        ws
-                end,
-    WSReq = websocket_req:new(
-              Protocol, Host, Port, Path, Socket,
-              Transport, Handler, generate_ws_key()),
-    ExtraHeaders = proplists:get_value(extra_headers, Opts, []),
-    case websocket_handshake(WSReq, ExtraHeaders) of
-        {error, _} = HandshakeError ->
-            proc_lib:init_ack(HandshakeError),
-            exit(normal);
-        {ok, Buffer} ->
-            AsyncStart = proplists:get_value(async_start, Opts, true),
-            AsyncStart andalso proc_lib:init_ack({ok, self()}),
-            {ok, HandlerState, KeepAlive} = case Handler:init(Args, WSReq) of
-                {ok, HS} -> {ok, HS, infinity};
-                {ok, HS, KA} -> {ok, HS, KA}
-            end,
-            AsyncStart orelse proc_lib:init_ack({ok, self()}),
-            case Socket of
-                {sslsocket, _, _} -> ssl:setopts(Socket, [{active, true}]);
-                _ -> inet:setopts(Socket, [{active, true}])
-            end,
-            case Buffer of
-                <<>> -> ok;
-                _    -> self() ! {Transport, Socket, Buffer}
-            end,
-            KATimer = case KeepAlive of
-                infinity -> undefined;
-                _ -> erlang:send_after(KeepAlive, self(), keepalive)
-            end,
-            websocket_loop(websocket_req:set([{keepalive, KeepAlive}, {keepalive_timer, KATimer}], WSReq),
-                           HandlerState, <<>>)
-    end.
 
 -type opt() :: {async_start, boolean()}
              | {extra_headers, [{string() | binary(), string() | binary()}]}
@@ -191,6 +136,78 @@ ws_client_init(Handler, Protocol, Host, Port, Path, Args, Opts) ->
                       end,
             websocket_loop(websocket_req:set([{keepalive,KeepAlive},{keepalive_timer,KATimer}], WSReq), HandlerState, <<>>)
   end.
+
+%% @doc Start the websocket client with a custom socket
+-spec start_link_with_socket(URL :: string() | binary(), Handler :: module(), HandlerArgs :: list(), Socket :: term()) ->
+                                  {ok, pid()} | {error, term()}.
+start_link_with_socket(URL, Handler, HandlerArgs, Socket) ->
+    start_link_with_socket(URL, Handler, HandlerArgs, Socket, []).
+
+start_link_with_socket(URL, Handler, HandlerArgs, Socket, AsyncStart) when is_boolean(AsyncStart) ->
+    start_link_with_socket(URL, Handler, HandlerArgs, Socket, [{async_start, AsyncStart}]);
+start_link_with_socket(URL, Handler, HandlerArgs, Socket, Opts) when is_binary(URL) ->
+	start_link_with_socket(erlang:binary_to_list(URL), Handler, HandlerArgs, Socket, Opts);
+start_link_with_socket(URL, Handler, HandlerArgs, Socket, Opts) when is_list(Opts) ->
+    Parsed = uri_string:parse(URL),
+    case Parsed of
+        #{scheme := SchemeStr, host := HostStr} ->
+            Scheme = list_to_atom(unicode:characters_to_list(SchemeStr)),
+            Host = unicode:characters_to_list(HostStr),
+            Port = maps:get(port, Parsed, default_port(Scheme)),
+            Path = maps:get(path, Parsed, "/"),
+            Query = case maps:get(query, Parsed, undefined) of
+                        undefined -> "";
+                        Q -> "?" ++ unicode:characters_to_list(Q)
+                    end,
+            FullPath = unicode:characters_to_list(Path) ++ Query,
+            proc_lib:start_link(?MODULE, ws_client_init_with_socket,
+                                [Handler, Scheme, Host, Port, FullPath, HandlerArgs, Socket, Opts]);
+        _ ->
+            {error, invalid_uri}
+    end.
+
+-spec ws_client_init_with_socket(Handler :: module(), Protocol :: websocket_req:protocol(),
+                                 Host :: string(), Port :: inet:port_number(), Path :: string() | binary(),
+                                 Args :: list(), Socket :: term(), Opts :: list()) ->
+                                      no_return().
+ws_client_init_with_socket(Handler, Protocol, Host, Port, Path, Args, Socket, Opts) ->
+    Transport = case Protocol of
+                    wss ->
+                        ssl;
+                    ws ->
+                        gen_tcp
+                end,
+    WSReq = websocket_req:new(
+              Protocol, Host, Port, Path, Socket,
+              Transport, Handler, generate_ws_key()),
+    ExtraHeaders = proplists:get_value(extra_headers, Opts, []),
+    case websocket_handshake(WSReq, ExtraHeaders) of
+        {error, _} = HandshakeError ->
+            proc_lib:init_ack(HandshakeError),
+            exit(normal);
+        {ok, Buffer} ->
+            AsyncStart = proplists:get_value(async_start, Opts, true),
+            AsyncStart andalso proc_lib:init_ack({ok, self()}),
+            {ok, HandlerState, KeepAlive} = case Handler:init(Args, WSReq) of
+                {ok, HS} -> {ok, HS, infinity};
+                {ok, HS, KA} -> {ok, HS, KA}
+            end,
+            AsyncStart orelse proc_lib:init_ack({ok, self()}),
+            case Socket of
+                {sslsocket, _, _} -> ssl:setopts(Socket, [{active, true}]);
+                _ -> inet:setopts(Socket, [{active, true}])
+            end,
+            case Buffer of
+                <<>> -> ok;
+                _    -> self() ! {Transport, Socket, Buffer}
+            end,
+            KATimer = case KeepAlive of
+                infinity -> undefined;
+                _ -> erlang:send_after(KeepAlive, self(), keepalive)
+            end,
+            websocket_loop(websocket_req:set([{keepalive, KeepAlive}, {keepalive_timer, KATimer}], WSReq),
+                           HandlerState, <<>>)
+    end.
 
 %% @doc Send http upgrade request and validate handshake response challenge
 -spec websocket_handshake(WSReq :: websocket_req:req(), [{string(), string()}]) -> {ok, binary()} | {error, term()}.
