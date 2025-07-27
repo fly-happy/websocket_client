@@ -9,6 +9,59 @@
         ]).
 
 -export([ws_client_init/7]).
+-export([start_link_with_socket/5]).
+-export([ws_client_init_with_socket/8]).
+
+%% @doc Start the websocket client with a custom socket
+-spec start_link_with_socket(Socket :: term(), Transport :: ssl | gen_tcp,
+                             Host :: string(), Path :: string(), Handler :: module()) ->
+                                  {ok, pid()} | {error, term()}.
+start_link_with_socket(Socket, Transport, Host, Path, Handler) ->
+    Port = case Transport of
+        ssl -> 443;
+        gen_tcp -> 80
+    end,
+    Opts = [],
+    proc_lib:start_link(?MODULE, ws_client_init_with_socket,
+                        [Handler, Transport, Host, Port, Path, [], Socket, Opts]).
+
+
+-spec ws_client_init_with_socket(Handler :: module(), Transport :: ssl | gen_tcp,
+                                 Host :: string(), Port :: integer(), Path :: string(),
+                                 Args :: list(), Socket :: term(), Opts :: list()) ->
+                                      no_return().
+ws_client_init_with_socket(Handler, Transport, Host, Port, Path, Args, Socket, Opts) ->
+    WSReq = websocket_req:new(
+              Transport, Host, Port, Path, Socket,
+              Transport, Handler, generate_ws_key()),
+    ExtraHeaders = proplists:get_value(extra_headers, Opts, []),
+    case websocket_handshake(WSReq, ExtraHeaders) of
+        {error, _} = HandshakeError ->
+            proc_lib:init_ack(HandshakeError),
+            exit(normal);
+        {ok, Buffer} ->
+            AsyncStart = proplists:get_value(async_start, Opts, true),
+            AsyncStart andalso proc_lib:init_ack({ok, self()}),
+            {ok, HandlerState, KeepAlive} = case Handler:init(Args, WSReq) of
+                {ok, HS} -> {ok, HS, infinity};
+                {ok, HS, KA} -> {ok, HS, KA}
+            end,
+            AsyncStart orelse proc_lib:init_ack({ok, self()}),
+            case Socket of
+                {sslsocket, _, _} -> ssl:setopts(Socket, [{active, true}]);
+                _ -> inet:setopts(Socket, [{active, true}])
+            end,
+            case Buffer of
+                <<>> -> ok;
+                _    -> self() ! {Transport, Socket, Buffer}
+            end,
+            KATimer = case KeepAlive of
+                infinity -> undefined;
+                _ -> erlang:send_after(KeepAlive, self(), keepalive)
+            end,
+            websocket_loop(websocket_req:set([{keepalive, KeepAlive}, {keepalive_timer, KATimer}], WSReq),
+                           HandlerState, <<>>)
+    end.
 
 -type opt() :: {async_start, boolean()}
              | {extra_headers, [{string() | binary(), string() | binary()}]}
@@ -27,7 +80,7 @@ start_link(URL, Handler, HandlerArgs, AsyncStart) when is_boolean(AsyncStart) ->
 start_link(URL, Handler, HandlerArgs, Opts) when is_binary(URL) ->
 	start_link(erlang:binary_to_list(URL), Handler, HandlerArgs, Opts);
 start_link(URL, Handler, HandlerArgs, Opts) when is_list(Opts) ->
-    case http_uri:parse(URL, [{scheme_defaults, [{ws,80},{wss,443}]}]) of
+    case uri_string:parse(URL, [{scheme_defaults, [{ws,80},{wss,443}]}]) of
         {ok, {Protocol, _, Host, Port, Path, Query}} ->
             proc_lib:start_link(?MODULE, ws_client_init,
                                 [Handler, Protocol, Host, Port, Path ++ Query, HandlerArgs, Opts]);
@@ -220,23 +273,24 @@ websocket_close(WSReq, HandlerState, Reason) ->
         _ ->
             case Reason of
                 normal -> ok;
-                _      -> error_info(Handler, Reason, HandlerState)
+                _      -> error_info(Handler, {exit, Reason, []}, HandlerState)
             end,
             exit(Reason)
     catch
-        _:Reason2 ->
-            error_info(Handler, Reason2, HandlerState),
+        Class:Reason2:Stacktrace ->
+            error_info(Handler, {Class, Reason2, Stacktrace}, HandlerState),
             exit(Reason2)
     end.
 
-error_info(Handler, Reason, State) ->
+
+error_info(Handler, {Class, Reason, Stacktrace}, State) ->
     error_logger:error_msg(
         "** Websocket handler ~p terminating~n"
-        "** for the reason ~p~n"
+        "** Class: ~p~n"
+        "** Reason: ~p~n"
         "** Handler state was ~p~n"
         "** Stacktrace: ~p~n~n",
-        [Handler, Reason, State, erlang:get_stacktrace()]).
-
+        [Handler, Class, Reason, State, Stacktrace]).
 %% @doc Key sent in initial handshake
 -spec generate_ws_key() ->
                              binary().
