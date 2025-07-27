@@ -80,7 +80,7 @@ start_link(URL, Handler, HandlerArgs, Opts) when is_binary(URL) ->
 	start_link(erlang:binary_to_list(URL), Handler, HandlerArgs, Opts);
 start_link(URL, Handler, HandlerArgs, Opts) when is_list(Opts) ->
     case uri_string:parse(URL) of
-        {ok, {Protocol, _, Host, _, Path, Query}} ->
+        #{scheme := Protocol, host := Host, port := _, path := Path, query := Query} ->
             % 如果端口是 undefined，手动根据协议补默认端口
             Port = case Protocol of
                 ws -> 80;
