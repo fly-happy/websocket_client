@@ -26,12 +26,18 @@ start_link_with_socket(Socket, Transport, Host, Path, Opts, Handler) ->
 
 
 -spec ws_client_init_with_socket(Handler :: module(), Transport :: ssl | gen_tcp,
-                                 Host :: string(), Port :: integer(), Path :: string(),
+                                 Host :: string(), Port :: inet:port_number(), Path :: string(),
                                  Args :: list(), Socket :: term(), Opts :: list()) ->
                                       no_return().
 ws_client_init_with_socket(Handler, Transport, Host, Port, Path, Args, Socket, Opts) ->
+    Protocol = case Transport of
+                    ssl ->
+                        wss;
+                    gen_tcp ->
+                        ws
+                end,
     WSReq = websocket_req:new(
-              Transport, Host, Port, Path, Socket,
+              Protocol, Host, Port, Path, Socket,
               Transport, Handler, generate_ws_key()),
     ExtraHeaders = proplists:get_value(extra_headers, Opts, []),
     case websocket_handshake(WSReq, ExtraHeaders) of
