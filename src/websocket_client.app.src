@@ -1,16 +1,8 @@
-{application, websocket_client,
- [
-  {description, "Erlang websocket client"},
+{application,
+ websocket_client,
+ [{description, "Erlang websocket client"},
   {vsn, "0.6.1"},
   {registered, []},
-  {applications, [
-                  kernel,
-                  stdlib,
-                  ssl,
-                  crypto,
-                  inets
-                 ]},
+  {applications, [kernel, stdlib, ssl, crypto, inets]},
   {env, []},
-  {modules, []}
- ]
-}.
+  {modules, []}]}.
