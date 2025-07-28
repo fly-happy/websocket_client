@@ -107,7 +107,7 @@ ws_client_init(Handler, Protocol, Host, Port, Path, Args, Opts, PreconnectedSock
         case SockReply of
             {ok, Sock} ->
                 {ok, Sock};
-            {error, Reason} = ConnectError ->
+            {error, _} = ConnectError ->
                 proc_lib:init_ack(ConnectError),
                 exit(normal)
         end,
